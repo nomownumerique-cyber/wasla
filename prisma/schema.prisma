@@ -1,0 +1,251 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String   @default("")
+  storeName    String   @default("My Store")
+  storeSlug    String   @default("my-store")
+  phone        String   @default("+213555000000")
+  whatsapp     String   @default("+213555000000")
+  plan         String   @default("trial") // free | trial | pro | business
+  trialEndsAt  DateTime?
+  locale       String   @default("en")
+  currency     String   @default("DZD")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  products     Product[]
+  accounts     ConnectedAccount[]
+  posts        Post[]
+  conversations Conversation[]
+  orders       Order[]
+  campaigns    Campaign[]
+  clients      Client[]
+  automations  Automation[]
+}
+
+// Agency model: a WASLA merchant (agency owner) manages several CLIENTS.
+// Each client is an isolated brand workspace — its own connected social
+// accounts (ClientChannel, connected via OAuth delegation, never a shared
+// password), its own posts, its own plan/fee billed by the agency.
+model Client {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String
+  contactEmail String   @default("")
+  contactPhone String   @default("")
+  industry     String   @default("general") // fashion | beauty | electronics | food | general
+  plan         String   @default("starter") // starter | growth | pro
+  monthlyFee   Float    @default(0)
+  status       String   @default("invited") // invited | active | paused
+  notes        String   @default("")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  channels ClientChannel[]
+  posts    Post[]
+}
+
+// A social account of a CLIENT (owned by the client, authorized to WASLA
+// through the platform OAuth flow — the agency never sees credentials).
+model ClientChannel {
+  id          String   @id @default(cuid())
+  clientId    String
+  client      Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  platform    String   // facebook | instagram | tiktok | whatsapp | x | youtube | snapchat | pinterest
+  handle      String   @default("")
+  followers   Int      @default(0)
+  status      String   @default("connected") // connected | disconnected
+  scopes      String   @default("[]") // JSON array of granted OAuth scopes
+  connectedAt DateTime @default(now())
+}
+
+model Product {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String
+  nameAr       String    @default("")
+  nameFr       String    @default("")
+  description  String    @default("")
+  category     String    @default("general")
+  price        Float     @default(0)
+  comparePrice Float?
+  stock        Int       @default(0)
+  sku          String    @default("")
+  image        String    @default("")
+  status       String    @default("active") // active | draft | archived
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  posts  Post[]
+  items  OrderItem[]
+}
+
+model ConnectedAccount {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform  String // facebook | instagram | tiktok | ... | metaads | tiktokads | googleads | linkedinads
+  handle    String   @default("")
+  followers Int      @default(0)
+  status    String   @default("connected") // connected | disconnected
+  kind      String   @default("social") // social | ads
+  adAccountId String @default("") // e.g. act_123456789 (ads platforms only)
+  scopes    String   @default("[]") // JSON array of granted OAuth scopes (ads platforms)
+  createdAt DateTime @default(now())
+}
+
+model Post {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clientId    String?
+  client      Client?   @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  productId   String?
+  product     Product?  @relation(fields: [productId], references: [id], onDelete: SetNull)
+  title       String    @default("")
+  content     String    @default("")
+  contentAr   String    @default("")
+  contentFr   String    @default("")
+  image       String    @default("")
+  platforms   String    @default("[]") // JSON array of platform ids
+  variants    String    @default("{}") // JSON map platform -> adapted text (universal publisher, per-network variants)
+  status      String    @default("draft") // draft | scheduled | published | failed
+  scheduledAt DateTime?
+  publishedAt DateTime?
+  results     String    @default("[]") // JSON per-platform publish results
+  likes       Int       @default(0)
+  comments    Int       @default(0)
+  views       Int       @default(0)
+  clicks      Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model Conversation {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel       String // whatsapp | facebook | instagram
+  customerName  String
+  customerPhone String    @default("")
+  unread        Int       @default(0)
+  lastMessageAt DateTime  @default(now())
+  createdAt     DateTime  @default(now())
+
+  messages Message[]
+  orders   Order[]
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender         String // customer | merchant
+  body           String
+  attachment     String? // uploaded file URL (/api/files/<name>) — images & PDF
+  automationId   String? // set when the message was sent by an automation rule (auto-reply)
+  createdAt      DateTime     @default(now())
+}
+
+// Automations: keyword-triggered rules that auto-answer COMMENTS (public) and
+// MESSAGES/DMs (private) on the connected Instagram and Facebook accounts.
+// One rule = keywords to listen for + a reply template with variables
+// ({store}, {product}, {price}, {whatsapp}). The engine runs on every incoming
+// message/comment and fires the best-matching active rule instantly.
+model Automation {
+  id              String    @id @default(cuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name            String
+  keywords        String    @default("[]") // JSON array of keywords (AR / Darija / FR / EN)
+  scope           String    @default("both") // comments | messages | both
+  platforms       String    @default("[\"facebook\",\"instagram\"]") // JSON array (facebook | instagram)
+  reply           String // reply template with variables
+  status          String    @default("active") // active | paused
+  triggered       Int       @default(0)
+  lastTriggeredAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model Order {
+  id              String        @id @default(cuid())
+  userId          String
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orderNumber     String
+  conversationId  String?
+  conversation    Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  customerName    String
+  customerPhone   String        @default("")
+  wilayaCode      Int           @default(16)
+  wilayaName      String        @default("Alger")
+  commune         String        @default("")
+  address         String        @default("")
+  deliveryType    String        @default("home") // home | desk
+  deliveryFee     Float         @default(0)
+  subtotal        Float         @default(0)
+  total           Float         @default(0)
+  status          String        @default("pending") // pending | confirmed | packed | shipped | delivered | returned | cancelled
+  paymentMethod   String        @default("cod")
+  whatsappConfirmed Boolean    @default(false)
+  carrier         String? // yalidine | zrexpress | maystro | noest
+  trackingNumber  String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  items OrderItem[]
+
+  @@unique([userId, orderNumber])
+}
+
+model OrderItem {
+  id        String   @id @default(cuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  name      String
+  price     Float
+  quantity  Int      @default(1)
+}
+
+model Campaign {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  platform    String // meta | tiktok | google | linkedin
+  objective   String   @default("sales") // sales | traffic | awareness
+  budget      Float    @default(0)
+  days        Int      @default(7)
+  status      String   @default("active") // active | paused | completed
+  reach       Int      @default(0)
+  clicks      Int      @default(0)
+  spend      Float    @default(0)
+  conversions Int      @default(0)
+  adAccountId String   @default("") // connected ads account reference (act_...)
+  startDate  DateTime @default(now())
+  createdAt  DateTime @default(now())
+}
+
+model Wilaya {
+  code     Int    @id
+  name     String
+  nameAr   String
+  nameFr   String
+  zone     Int    @default(1)
+  homeFee  Float  @default(400)
+  deskFee  Float  @default(200)
+}
